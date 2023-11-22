@@ -3,6 +3,7 @@
 #include <ATen/TensorIndexing.h>
 #include <ATen/core/ATen_fwd.h>
 #include <ATen/core/interned_strings.h>
+#include <ATen/ops/all.h>
 #include <ATen/ops/cat.h>
 #include <ATen/ops/flatten.h>
 #include <ATen/ops/full_like.h>
@@ -38,28 +39,21 @@ void PinNetImpl::create_layers()
     "fc_input",
     torch::nn::Linear(INPUT_DIM,HIDDEN_LAYER_DIM)
   );
-  
   //- register and  hidden layers 
   for(int i=0;i<N_HIDDEN_LAYERS;i++)
   {
     //- hiden layer name
     std::string layer_name = "fc_hidden" + std::to_string(i);
-    
     //- register each hidden layer
     torch::nn::Linear linear_layer = register_module
     (
       layer_name,
       torch::nn::Linear(HIDDEN_LAYER_DIM,HIDDEN_LAYER_DIM)
     );
-     
     //- intialize network parameters
     torch::nn::init::xavier_normal_(linear_layer->weight);
-    
-    // std::cout<<"weights for layer "<<i<<linear_layer->weight<<std::endl;
-    
     //- populate sequential with layers
     hidden_layers->push_back(linear_layer);
-
     //- register activation functions 
     hidden_layers->push_back
     (
@@ -70,7 +64,6 @@ void PinNetImpl::create_layers()
       )
     );
   }
-  
   //- register output layer
   output = register_module
   (
@@ -105,7 +98,6 @@ PinNetImpl::PinNetImpl
   create_layers();
 }
 
-
 //- forward propagation 
 torch::Tensor PinNetImpl::forward
 (
@@ -117,8 +109,6 @@ torch::Tensor PinNetImpl::forward
   I = output(I);
   return I;
 }
-  
-
 //------------------end PINN definitions-------------------------------------//
 
 
@@ -200,7 +190,6 @@ torch::Tensor d_dn
 
 //----------------------------CahnHillard function definitions---------------//
 
-//- I is the input tensor  having the shape {u,v,p,C} X N_BATCHSIZE
 
 //- thermoPhysical properties for mixture
 torch::Tensor CahnHillard::thermoProp
@@ -210,8 +199,8 @@ torch::Tensor CahnHillard::thermoProp
   const torch::Tensor &I
 )
 {
-  //- get phase field var 
-  const torch::Tensor &C = I.index({Slice(),3});
+  //- get auxillary phase field var to correct for bounds 
+  const torch::Tensor C = CahnHillard::Cbar(I.index({Slice(),3}));
   torch::Tensor mixtureProp = 
     0.5*(1+C)*propLiquid + 0.5*(1-C)*propGas;
   return mixtureProp;
@@ -291,10 +280,35 @@ torch::Tensor CahnHillard::L_MomX2d
   const mesh2D &mesh
 )
 { 
+  float &rhoL = mesh.thermo_.rhoL;
+  float &muL = mesh.thermo_.muL;
+  float rhoG = mesh.thermo_.rhoG;
+  float muG = mesh.thermo_.muG;
   const torch::Tensor &u = mesh.fieldsPDE_.index({Slice(),0});
   const torch::Tensor &v = mesh.fieldsPDE_.index({Slice(),1});
   const torch::Tensor &p = mesh.fieldsPDE_.index({Slice(),2});
   const torch::Tensor &C = mesh.fieldsPDE_.index({Slice(),3});
+  //- get density of mixture TODO correct this function to take in just mesh
+  torch::Tensor rhoM = CahnHillard::thermoProp(rhoL, rhoG, mesh.fieldsPDE_);
+  //- get viscosity of mixture
+  torch::Tensor muM = CahnHillard::thermoProp(muL, muG, mesh.fieldsPDE_);
+  torch::Tensor du_dt = d_d1(u,mesh.iPDE_,2);
+  torch::Tensor du_dx = d_d1(u,mesh.iPDE_,0);
+  torch::Tensor du_dy = d_d1(u,mesh.iPDE_,1);
+  torch::Tensor dv_dx = d_d1(v,mesh.iPDE_,0);
+  torch::Tensor dC_dx = d_d1(C,mesh.iPDE_,0);
+  torch::Tensor dC_dy = d_d1(C,mesh.iPDE_,1);
+  torch::Tensor dp_dx = d_d1(p,mesh.iPDE_,0);
+  //- derivative order first spatial variable later
+  torch::Tensor du_dxx = d_dn(u,mesh.iPDE_,2,0);
+  torch::Tensor du_dyy = d_dn(u,mesh.iPDE_,2,1);
+  //- get x component of the surface tension force
+  torch::Tensor fx = CahnHillard::surfaceTension(mesh,0);
+  torch::Tensor loss1 = rhoM*(du_dt + u*du_dx + v*du_dy) + dp_dx;
+  torch::Tensor loss2 =  0.5*(muL - muG)*dC_dy*(du_dy + dv_dx) - (muL -muG)*dC_dx*du_dx;
+  torch::Tensor loss3 = -muM*(du_dxx + du_dyy) - fx;
+  torch::Tensor loss = (loss1 + loss2 + loss3)/rhoL;
+  return torch::mse_loss(loss, torch::zeros_like(loss));
 }
 
 //- momentum loss for y direction in 2D
@@ -347,20 +361,21 @@ torch::Tensor CahnHillard::BCloss(mesh2D &mesh)
 //- get the intial loss for the 
 torch::Tensor CahnHillard::ICloss(mesh2D &mesh)
 {
-  //- x vel
+  //- x vel prediction in current iteration
   const torch::Tensor &u = mesh.fieldsIC_.index({Slice(),0});
-  //- y vel
+  //- y vel prediction in current iteration
   const torch::Tensor &v = mesh.fieldsIC_.index({Slice(),1});
-  //- phaseField variable
+  //- phaseField variable prediction in current iteration
   const torch::Tensor &C = mesh.fieldsIC_.index({Slice(),2});
-  
-  torch::Tensor uLoss = torch::mse_loss(u, torch::zeros_like(u));
-  torch::Tensor vLoss = torch::mse_loss(v, torch::zeros_like(u));
-  torch::Tensor CLoss = torch::mse_loss(C,CahnHillard::C_at_IntialTime(mesh));
+  //- get all the intial losses
+  torch::Tensor uLoss = torch::mse_loss(u,CahnHillard::u_at_InitialTime(mesh));
+  torch::Tensor vLoss = torch::mse_loss(v,CahnHillard::v_at_InitialTime(mesh));
+  torch::Tensor CLoss = torch::mse_loss(C,CahnHillard::C_at_InitialTime(mesh));
+  //- return total loss
   return uLoss +vLoss +CLoss;
 }
 
-
+//- total loss function for the optimizer
 torch::Tensor CahnHillard::loss(mesh2D &mesh)
 {
   // torch::Tensor pdeloss = CahnHillard::PDEloss(mesh);
@@ -370,7 +385,7 @@ torch::Tensor CahnHillard::loss(mesh2D &mesh)
   return bcLoss + pdeLoss + icLoss; //+ bcloss;
 }
 
-torch::Tensor CahnHillard::C_at_IntialTime(mesh2D &mesh)
+torch::Tensor CahnHillard::C_at_InitialTime(mesh2D &mesh)
 {
   if(mesh.lbT_ == 0)
   {
@@ -381,6 +396,7 @@ torch::Tensor CahnHillard::C_at_IntialTime(mesh2D &mesh)
     const torch::Tensor &x = mesh.iIC_.index({Slice(),0});
     //- y
     const torch::Tensor &y = mesh.iIC_.index({Slice(),1});
+    //- intial condition
     torch::Tensor Ci =torch::tanh((torch::sqrt(torch::pow(x - xc, 2) + torch::pow(y - yc, 2)) - 0.15)/ (1.41421356237 * e));
     
     return Ci;
@@ -392,6 +408,41 @@ torch::Tensor CahnHillard::C_at_IntialTime(mesh2D &mesh)
   }
 }
 
+torch::Tensor CahnHillard::u_at_InitialTime(mesh2D &mesh)
+{
+  if(mesh.lbT_ ==0)
+  {
+    torch::zeros_like(mesh.iIC_.index({Slice(),0}));
+  }
+  else
+  {
+    return mesh.netPrev_->forward(mesh.iIC_).index({Slice(),0});
+  }
+}
+
+torch::Tensor CahnHillard::v_at_InitialTime(mesh2D &mesh)
+{
+  if(mesh.lbT_ ==0)
+  {
+    return torch::zeros_like(mesh.iIC_.index({Slice(),0}));
+  }
+  else
+  {
+    return mesh.netPrev_->forward(mesh.iIC_).index({Slice(),1});
+  }
+}
+
+
+//- auxiliary variable to bound thermophysical properties 
+torch::Tensor CahnHillard::Cbar(const torch::Tensor &C)
+{
+  //- get the absolute value of the phasefield tensor
+  torch::Tensor absC = torch::abs(C);
+  if(torch::all(absC <=1).item<float>())
+  {
+    return C;
+  }
+}
 
 //---------------------end CahnHillard function definitions------------------//
 
@@ -409,27 +460,19 @@ torch::Tensor Heat::L_Diffusion2D
 
 }
 
-
 //- total loss for 2d diffusion equation
 torch::Tensor Heat::loss(mesh2D &mesh)
 {
   //- create samples
-  // mesh.createTotalSamples(net,2,mesh.xyGrid);
   torch::Tensor pdeloss = Heat::L_Diffusion2D(mesh);
   torch::Tensor l = torch::mse_loss(mesh.fieldsLeft_,torch::zeros_like(mesh.fieldsLeft_));
-  
   torch::Tensor r = torch::mse_loss(mesh.fieldsRight_,torch::zeros_like(mesh.fieldsRight_));
-
   torch::Tensor t = torch::mse_loss(mesh.fieldsTop_,torch::zeros_like(mesh.fieldsTop_));
-
   torch::Tensor b = torch::mse_loss(mesh.fieldsBottom_,torch::zeros_like(mesh.fieldsBottom_));
-
   return l+b+r+t+pdeloss;
   
 }
 //---------------------------mesh2d function definitions---------------------//
-
-  
 
 //- construct computational domain for the PINN instance
 mesh2D::mesh2D
@@ -466,53 +509,19 @@ mesh2D::mesh2D
 
   //- total number of points in the entire domain (nDOF)
   Ntotal_ = Nx_*Ny_*Nt_;
-  
-  std::cout<<"Creating dimensional grids: "<<std::endl;
-
   //- populate the individual 1D grids
   xGrid = torch::linspace(lbX_, ubX_, Nx_,device_);
   yGrid = torch::linspace(lbY_, ubY_, Ny_,device_);
   tGrid = torch::linspace(lbT_, ubT_, Nt_,device_);
-  
-  std::cout<<"done !\n"<<std::endl;
-
-  std::cout<<"Creating mesh: "<<std::endl;
-
-  //- construct entire mesh domain
+  //- construct entire mesh domain for transient 2D simulations
   mesh_ = torch::meshgrid({xGrid,yGrid,tGrid});
-  
-  std::cout<<"done !\n"<<std::endl;
-  
-  std::cout<<"Creating spatial grid: "<<std::endl;
+  //- spatial grid for steady state simulations 
   xyGrid = torch::meshgrid({xGrid,yGrid});
-
+  //- tensor to pass for converged neural net
   xy = torch::stack({xyGrid[0].flatten(),xyGrid[1].flatten()},1);
   xy.set_requires_grad(true);
-  std::cout<<"done !\n"<<std::endl;
-  
-  std::cout<<"Creating Boundary grids: "<<std::endl;
-
   //- create boundary grids
   createBC();
-  /*
-  //- create boundary grids for heat and boundary prediction
-  il = torch::stack({leftWall[0].flatten(),leftWall[1].flatten()},1);
-  il.set_requires_grad(true);  
-  ir = torch::stack({rightWall[0].flatten(),rightWall[1].flatten()},1);
-  ir.set_requires_grad(true);
-  it = torch::stack({topWall[0].flatten(),topWall[1].flatten()},1);
-  it.requires_grad_(true);
-  ib = torch::stack({bottomWall[0].flatten(),bottomWall[1].flatten()},1);
-  ib.set_requires_grad(true);
-  */
-  std::cout<<"done !\n"<<std::endl;
-  
-  std::cout<<"Initializing solution fields: "<<std::endl;
-
-  //- initialize the flow field
-  initialize();
-  
-  std::cout<<"done !\n"<<std::endl;
 }
 
 //- operator overload () to acess main computational domain
@@ -528,21 +537,7 @@ torch::Tensor  mesh2D::operator()(int i, int j, int k)
   ); 
 }
 
-//- intialize solution fields
-void mesh2D::initialize()
-{
-  //- if t = 0 
-  if(lbT_ == 0)
-  {
-
-  }
-  else 
-  {
-    
-  }
-}
-
-//- TODO: cout info
+//- create boundary grids
 void mesh2D::createBC()
 {
   
@@ -568,6 +563,8 @@ void mesh2D::createBC()
   }
 }
 
+//- general method to create samples
+//- used to create boundary as well as intial state samples
 void mesh2D::createSamples
 (
   std::vector<torch::Tensor> &grid, 
@@ -577,14 +574,11 @@ void mesh2D::createSamples
 {
   //- vectors to stack
   std::vector<torch::Tensor> vectorStack;
-  
   //- total number of points in the grid
   int ntotal = grid[0].numel();
-  
   //- random indices for PDE loss
   torch::Tensor pdeIndices_ = torch::randperm
   (ntotal,device_).slice(0,0,nSamples);
-  
   //- push vectors to vectors stack
   for(int i=0;i<grid.size();i++)
   {
@@ -596,46 +590,20 @@ void mesh2D::createSamples
       ).index_select(0,pdeIndices_)
     );
   }
-
   //- pass stack to get samples
   samples = torch::stack(vectorStack,1);
-  
   //- set gradient =true
   samples.set_requires_grad(true);
 }
 
-
-
-//- generate sampling points for IC loss
-void mesh2D::getICsamples(int N_IC)
-{
-  //- random indices for IC loss
-  torch::Tensor icIndices_ = 
-    torch::randperm(Ntotal_,device_).slice(0,0,N_IC);
-  
-  //- get sampling points for x,y,t
-  torch::Tensor xIC_ = 
-    torch::flatten(mesh_[0]).index_select(0,icIndices_);
-  torch::Tensor yIC_ = 
-    torch::flatten(mesh_[1]).index_select(0,icIndices_);
-  
-  //- time input is lower bound for all spatial inputs
-  iIC_ = torch::stack
-  (
-    {
-      xIC_,
-      yIC_,
-      torch::full_like(xIC_,lbT_,device_)
-    },1
-  );
-}
-
 //- create the total samples required for neural net
+//- these samples are the input features to the neural net forward passes
 void mesh2D::createTotalSamples
 (
-  int iter
+  int iter // current iter when looping through the batches
 ) 
 {
+  //- generate random indices to generate random samples from grids
   createIndices();
   if(net_->transient_==0)
   {
@@ -650,7 +618,6 @@ void mesh2D::createTotalSamples
   }
   else
   {
-
     torch::Tensor batchIndices = pdeIndices_.slice
     (
       0,
@@ -658,30 +625,27 @@ void mesh2D::createTotalSamples
       (iter + 1)*net_->BATCHSIZE
     );
     createSamples(mesh_,iPDE_,batchIndices);
-    
   }
-  //- generate samples for initial condition residual
-  
   if(net_->transient_ == 1)
   {
-    // getICsamples(net_->N_IC);
+    //- update samples for intialGrid
     createSamples(initialGrid_,iIC_,net_->N_IC);
   }
-  //- generate samples for boundary condtorch::nn clonerition residual
-  
   //- update samples for left wall 
   createSamples(leftWall,iLeftWall_,net_->N_BC);
-  
   //- update samples for right wall 
   createSamples(rightWall, iRightWall_,net_->N_BC);
-  
   //- update samples for top wall 
   createSamples(topWall,iTopWall_,net_->N_BC);
-  
   //- update samples for bottom wall
   createSamples(bottomWall,iBottomWall_,net_->N_BC); 
 }
 
+
+//- update input features for each batch iteration,
+//- pass in the iteration 
+// (extremely shitty method, but cannot think of a 
+//  better one as of now)
 void mesh2D::update(int iter)
 { 
   createTotalSamples(iter);
@@ -712,6 +676,9 @@ void mesh2D::createIndices()
   }
 }
 
+//- createSamples over load to create samples for pde loss as it will buffer
+//- passed in batches instead of one go, the other samples being way smaller
+//- in size remain unchanged
 void mesh2D::createSamples
 (
  std::vector<torch::Tensor> &grid,
@@ -732,13 +699,10 @@ void mesh2D::createSamples
       ).index_select(0,indices)
     );
   }
-
   //- pass stack to get samples
   samples = torch::stack(vectorStack,1);
-  
   //- set gradient =true
   samples.set_requires_grad(true);
-
 }
 
 void mesh2D::updateMesh()
@@ -751,7 +715,12 @@ void mesh2D::updateMesh()
   tGrid = torch::linspace(lbT_, ubT_, Nt_,device_);
   //- update main mesh
   mesh_ = torch::meshgrid({xGrid,yGrid,tGrid});
-  
+  //- update the boundary grids
+  createBC();
+  //- transfer over parameters of current converged net to 
+  //- previous net reference to use as intial condition for 
+  //- intial losses
+  loadState(net_, netPrev_);
 }
 
 //-------------------------end mesh2D definitions----------------------------//

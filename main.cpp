@@ -153,9 +153,9 @@ int main(int argc,char * argv[])
   
   // std::cout<<mesh.mesh_[0];
   writeTensorToFile(mesh.iIC_,"total.txt");
-  torch::Tensor C = CahnHillard::C_at_IntialTime(mesh);
-  
-  writeTensorToFile(C,"intial.txt");
+  torch::Tensor C = CahnHillard::C_at_InitialTime(mesh);
+  torch::Tensor C1 = CahnHillard::Cbar(C);
+  writeTensorToFile(C1,"intial.txt");
   std::cout<<mesh.thermo_.epsilon<<"\n";
    /*
   torch::optim::Adam adam_optim1(mesh.net_->parameters(), torch::optim::AdamOptions(1e-4));  // default Adam lr

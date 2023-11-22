@@ -225,12 +225,8 @@ class mesh2D
     torch::Tensor operator()(int i,int j,int k);
     //- create boundary grids
     void createBC();
-    //- intialize the flow field at time t=0
-    void initialize();
     //- after sub-net converges, upadate solution fields
     void update(int iter);
-    //- generate sampling points for IC loss from internal domain
-    void getICsamples(int N_IC); // remove this function not needed
     //- general function to create samples for neural net input
     void createSamples 
     (
@@ -316,11 +312,15 @@ torch::Tensor BCloss(mesh2D &mesh);
 torch::Tensor loss(mesh2D &mesh);
 
 //- constrains C
-torch::Tensor Cbar(torch::Tensor &C);
+torch::Tensor Cbar(const torch::Tensor &C);
+
 
 //- generates phase field vars at t=0
-torch::Tensor C_at_IntialTime(mesh2D &mesh);
+torch::Tensor C_at_InitialTime(mesh2D &mesh);
 
+torch::Tensor u_at_InitialTime(mesh2D &mesh);
+
+torch::Tensor v_at_InitialTime(mesh2D &mesh);
 } 
 //- end CahnHillard namespace 
 
@@ -374,5 +374,10 @@ torch::Tensor d_d1
 );
 
 //---------------------------------------------------------------------------//
-
+//- function to make a local clone a neural net given already constructed 
+//- essentially updates parameters using the copy function 
+//- other members are left the same, intially the two nets are the same, 
+//- once net1 converges, net2 takes the network parameters and acts as an initial 
+//- condition while net1 continues to train
+//- the process repeats each time a net converges or max iters run out
 void loadState(PinNet& net1, PinNet &net2);
