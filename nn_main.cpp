@@ -317,6 +317,36 @@ torch::Tensor CahnHillard::L_MomY2d
   const mesh2D &mesh
 )
 {
+  float &rhoL = mesh.thermo_.rhoL;
+  float &muL = mesh.thermo_.muL;
+  float rhoG = mesh.thermo_.rhoG;
+  float muG = mesh.thermo_.muG;
+  const torch::Tensor &u = mesh.fieldsPDE_.index({Slice(),0});
+  const torch::Tensor &v = mesh.fieldsPDE_.index({Slice(),1});
+  const torch::Tensor &p = mesh.fieldsPDE_.index({Slice(),2});
+  const torch::Tensor &C = mesh.fieldsPDE_.index({Slice(),3});
+  //- get density of mixture TODO correct this function to take in just mesh
+  torch::Tensor rhoM = CahnHillard::thermoProp(rhoL, rhoG, mesh.fieldsPDE_);
+  //- get viscosity of mixture
+  torch::Tensor muM = CahnHillard::thermoProp(muL, muG, mesh.fieldsPDE_);
+  torch::Tensor dv_dt = d_d1(v,mesh.iPDE_,2);
+  torch::Tensor dv_dx = d_d1(v,mesh.iPDE_,0);
+  torch::Tensor dv_dy = d_d1(v,mesh.iPDE_,1);
+  torch::Tensor du_dy = d_d1(u,mesh.iPDE_,1);
+  torch::Tensor dC_dx = d_d1(C,mesh.iPDE_,0);
+  torch::Tensor dC_dy = d_d1(C,mesh.iPDE_,1);
+  torch::Tensor dp_dy = d_d1(p,mesh.iPDE_,1);
+  //- derivative order first spatial variable later
+  torch::Tensor dv_dxx = d_dn(v,mesh.iPDE_,2,0);
+  torch::Tensor dv_dyy = d_dn(v,mesh.iPDE_,2,1);
+  //- get x component of the surface tension force
+  torch::Tensor fy = CahnHillard::surfaceTension(mesh,1);
+  torch::Tensor gy = torch::full_like(fy,9.81);
+  torch::Tensor loss1 = rhoM*(dv_dt + u*dv_dx + v*dv_dy) + dp_dy;
+  torch::Tensor loss2 =  0.5*(muL - muG)*dC_dx*(du_dy + dv_dx) - (muL -muG)*dC_dy*dv_dy;
+  torch::Tensor loss3 = -muM*(dv_dxx + dv_dyy) - fy;
+  torch::Tensor loss = (loss1 + loss2 + loss3)/rhoL;
+  return torch::mse_loss(loss, torch::zeros_like(loss));
 }
 
 //- get total PDE loss
