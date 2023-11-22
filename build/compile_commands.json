@@ -1,0 +1,25 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/c++",
+      "-DUSE_C10D_GLOO",
+      "-DUSE_C10D_NCCL",
+      "-DUSE_DISTRIBUTED",
+      "-DUSE_RPC",
+      "-DUSE_TENSORPIPE",
+      "-isystem",
+      "/home/kazeshini/Ctorch/libtorch/include",
+      "-isystem",
+      "/home/kazeshini/Ctorch/libtorch/include/torch/csrc/api/include",
+      "-D_GLIBCXX_USE_CXX11_ABI=0",
+      "-D_GLIBCXX_USE_CXX11_ABI=0",
+      "-c",
+      "-o",
+      "CMakeFiles/torch_test.dir/main.cpp.o",
+      "/home/kazeshini/Ctorch/main.cpp"
+    ],
+    "directory": "/home/kazeshini/Ctorch/build",
+    "file": "/home/kazeshini/Ctorch/main.cpp",
+    "output": "/home/kazeshini/Ctorch/build/CMakeFiles/torch_test.dir/main.cpp.o"
+  }
+]

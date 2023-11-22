@@ -1,0 +1,3 @@
+/home/kazeshini/Ctorch/build/CMakeFiles/torch_test.dir
+/home/kazeshini/Ctorch/build/CMakeFiles/edit_cache.dir
+/home/kazeshini/Ctorch/build/CMakeFiles/rebuild_cache.dir
