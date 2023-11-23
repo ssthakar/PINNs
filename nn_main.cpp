@@ -60,7 +60,7 @@ void PinNetImpl::create_layers()
       register_module
       (
         "fc_relu_hidden" + std::to_string(i), 
-        torch::nn::Tanh()
+        torch::nn::SiLU()
       )
     );
   }
@@ -104,7 +104,7 @@ torch::Tensor PinNetImpl::forward
  const torch::Tensor& X
 )
 {
-  torch::Tensor I = torch::tanh(input(X));
+  torch::Tensor I = torch::silu(input(X));
   I = hidden_layers->forward(I);
   I = output(I);
   return I;
@@ -344,7 +344,7 @@ torch::Tensor CahnHillard::L_MomY2d
   torch::Tensor gy = torch::full_like(fy,9.81);
   torch::Tensor loss1 = rhoM*(dv_dt + u*dv_dx + v*dv_dy) + dp_dy;
   torch::Tensor loss2 =  0.5*(muL - muG)*dC_dx*(du_dy + dv_dx) - (muL -muG)*dC_dy*dv_dy;
-  torch::Tensor loss3 = -muM*(dv_dxx + dv_dyy) - fy;
+  torch::Tensor loss3 = -muM*(dv_dxx + dv_dyy) - fy - rhoM*gy;
   torch::Tensor loss = (loss1 + loss2 + loss3)/rhoL;
   return torch::mse_loss(loss, torch::zeros_like(loss));
 }
@@ -412,7 +412,7 @@ torch::Tensor CahnHillard::loss(mesh2D &mesh)
   torch::Tensor bcLoss = CahnHillard::BCloss(mesh);
   torch::Tensor pdeLoss = CahnHillard::PDEloss(mesh);
   torch::Tensor icLoss = CahnHillard::ICloss(mesh);
-  return bcLoss + pdeLoss + icLoss; //+ bcloss;
+  return bcLoss + pdeLoss + icLoss + bcLoss;
 }
 
 torch::Tensor CahnHillard::C_at_InitialTime(mesh2D &mesh)
@@ -442,7 +442,8 @@ torch::Tensor CahnHillard::u_at_InitialTime(mesh2D &mesh)
 {
   if(mesh.lbT_ ==0)
   {
-    torch::zeros_like(mesh.iIC_.index({Slice(),0}));
+    return torch::zeros_like(mesh.iIC_.index({Slice(),0}));
+    
   }
   else
   {
@@ -471,6 +472,9 @@ torch::Tensor CahnHillard::Cbar(const torch::Tensor &C)
   if(torch::all(absC <=1).item<float>())
   {
     return C;
+  }
+  else {
+    return torch::sign(C);
   }
 }
 
@@ -607,8 +611,9 @@ void mesh2D::createSamples
   //- total number of points in the grid
   int ntotal = grid[0].numel();
   //- random indices for PDE loss
-  torch::Tensor pdeIndices_ = torch::randperm
+  torch::Tensor indices = torch::randperm
   (ntotal,device_).slice(0,0,nSamples);
+  
   //- push vectors to vectors stack
   for(int i=0;i<grid.size();i++)
   {
@@ -617,7 +622,7 @@ void mesh2D::createSamples
       torch::flatten
       (
         grid[i]
-      ).index_select(0,pdeIndices_)
+      ).index_select(0,indices)
     );
   }
   //- pass stack to get samples
@@ -634,7 +639,10 @@ void mesh2D::createTotalSamples
 ) 
 {
   //- generate random indices to generate random samples from grids
-  createIndices();
+  if(iter == 0)
+  {
+    createIndices();
+  }
   if(net_->transient_==0)
   {
     torch::Tensor batchIndices = torch::slice
@@ -656,19 +664,23 @@ void mesh2D::createTotalSamples
     );
     createSamples(mesh_,iPDE_,batchIndices);
   }
-  if(net_->transient_ == 1)
+  //- create samples only for the first iteration
+  if(iter ==0)
   {
+    if(net_->transient_ == 1)
+    {
     //- update samples for intialGrid
-    createSamples(initialGrid_,iIC_,net_->N_IC);
+      createSamples(initialGrid_,iIC_,net_->N_IC);
+    }
+    //- update samples for left wall 
+    createSamples(leftWall,iLeftWall_,net_->N_BC);
+    //- update samples for right wall 
+    createSamples(rightWall, iRightWall_,net_->N_BC);
+    //- update samples for top wall 
+    createSamples(topWall,iTopWall_,net_->N_BC);
+    //- update samples for bottom wall
+    createSamples(bottomWall,iBottomWall_,net_->N_BC); 
   }
-  //- update samples for left wall 
-  createSamples(leftWall,iLeftWall_,net_->N_BC);
-  //- update samples for right wall 
-  createSamples(rightWall, iRightWall_,net_->N_BC);
-  //- update samples for top wall 
-  createSamples(topWall,iTopWall_,net_->N_BC);
-  //- update samples for bottom wall
-  createSamples(bottomWall,iBottomWall_,net_->N_BC); 
 }
 
 
@@ -679,6 +691,7 @@ void mesh2D::createTotalSamples
 void mesh2D::update(int iter)
 { 
   createTotalSamples(iter);
+  
   //- update all fields
   fieldsPDE_ = net_->forward(iPDE_);
   if(net_->transient_ == 1)
@@ -703,6 +716,7 @@ void mesh2D::createIndices()
   {
     pdeIndices_ = 
       torch::randperm(mesh_[0].numel(),device_).slice(0,0,net_->N_EQN);
+    
   }
 }
 

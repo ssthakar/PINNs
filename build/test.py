@@ -6,8 +6,8 @@ coordinates = np.loadtxt('total.txt')
 x, y = coordinates[:, 0], coordinates[:, 1]
 
 # Read temperatures from the file
-temperatures = np.loadtxt('intial.txt')
-
+data = np.loadtxt('initial.txt')
+temperatures = data[:, 3]
 # Reshape the temperatures into a 2D grid
 triang = tri.Triangulation(x, y)
 # Z = temperatures.reshape(X.shape)

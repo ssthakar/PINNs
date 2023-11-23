@@ -132,7 +132,7 @@ int main(int argc,char * argv[])
   // torch::Tensor testLoss = CahnHillard::PDEloss(mesh);
   // std::cout<<testLoss<<"\n";
   
-  
+  /*
   mesh.iIC_ = torch::stack
   (
     {
@@ -157,10 +157,12 @@ int main(int argc,char * argv[])
   torch::Tensor C1 = CahnHillard::Cbar(C);
   writeTensorToFile(C1,"intial.txt");
   std::cout<<mesh.thermo_.epsilon<<"\n";
-   /*
+  */ 
+
+
+  
   torch::optim::Adam adam_optim1(mesh.net_->parameters(), torch::optim::AdamOptions(1e-4));  // default Adam lr
   
-
   torch::optim::Adam adam_optim2(mesh.net_->parameters(), torch::optim::AdamOptions(1e-5));  // default Adam lr
   
   torch::optim::Adam adam_optim3(mesh.net_->parameters(), torch::optim::AdamOptions(1e-6));  // default Adam lr
@@ -177,12 +179,12 @@ int main(int argc,char * argv[])
   std::ofstream lossFile("loss.txt");
   std::cout<<"traning\n";
     auto start_time = std::chrono::high_resolution_clock::now();
-  while(iter<=1)
+  while(iter<=700)
   {
     auto closure = [&](torch::optim::Optimizer &optim)
     { 
       float totalLoss=0.0;
-      for(int i=0;i<4;i++)
+      for(int i=0;i<8;i++)
       {
         //- generates solution fields as well as input features
         mesh.update(i);
@@ -194,7 +196,9 @@ int main(int argc,char * argv[])
         totalLoss +=loss.item<float>();
       }
       // std::cout<<"return closure\n";
-      return totalLoss/4;
+        // std::cout<<totalLoss<<"\n";
+      return totalLoss/8;
+      
     };
 
             if (iter <= 1000) {
@@ -227,8 +231,22 @@ int main(int argc,char * argv[])
       auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
 
     std::cout << "Execution time: " << duration.count() << " microseconds" << std::endl;
+  
 
+  mesh.iIC_ = torch::stack
+  (
+    {
+      torch::flatten(mesh.mesh_[0]),
+      torch::flatten(mesh.mesh_[1]),
+      torch::full_like(torch::flatten(mesh.mesh_[2]),0.2)
+    },1
+  );
+  torch::Tensor C = mesh.net_->forward(mesh.iIC_);
+  
+  writeTensorToFile(mesh.iIC_,"total.txt");
+  writeTensorToFile(C,"initial.txt"); 
 
+  /*
   // loadState(net2,mesh1.net_);
   torch::Tensor xy = torch::stack({mesh.xyGrid[0].flatten(),mesh.xyGrid[1].flatten()},1);
   torch::Tensor uFinal = mesh.net_->forward(xy);
@@ -250,9 +268,9 @@ int main(int argc,char * argv[])
   writeTensorToFile(tensor2D, "testXY.txt");
   
 
-  
+  */
 
- */
+ 
   
   return 0;
 

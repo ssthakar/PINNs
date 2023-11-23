@@ -163,18 +163,22 @@ class mesh2D
     std::vector<torch::Tensor> leftWall;
     torch::Tensor iLeftWall_;
     torch::Tensor il;
+    torch::Tensor leftIndices_;
     //- right wall 
     std::vector<torch::Tensor> rightWall;
     torch::Tensor iRightWall_;
     torch::Tensor ir;
+    torch::Tensor rightIndices_;
     //- top wall
     std::vector<torch::Tensor> topWall;
     torch::Tensor iTopWall_;
     torch::Tensor it;
+    torch::Tensor topIndices_;
     //- bottom walla
     std::vector<torch::Tensor> bottomWall;
     torch::Tensor iBottomWall_;
     torch::Tensor ib;
+    torch::Tensor bottomIndices_;
     //- reference to device
     torch::Device &device_;
     //- reference to thermoPhyiscal class
@@ -191,15 +195,8 @@ class mesh2D
     torch::Tensor pdeIndices_;
     //-sampling points for IC loss
     std::vector<torch::Tensor> initialGrid_;
-    torch::Tensor iIC_;  
-    //- sampling points for left wall 
-    torch::Tensor bcLeft_;
-    //- sampling points for rightwall 
-    torch::Tensor bcRight_;
-    //- sampling points for topWall
-    torch::Tensor bcTop_;
-    //- sampling poitns for bottom wall 
-    torch::Tensor bcBottom_;
+    torch::Tensor iIC_;
+    torch::Tensor icIndices_;
     //- number of points in x direction 
     int Nx_;
     //- number of points in y direction
